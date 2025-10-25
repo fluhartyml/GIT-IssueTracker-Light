@@ -1,9 +1,9 @@
 //
-//  ContentView.swift
+//  ContentView[macOS].swift
 //  GIT IssueTracker Light
 //
-//  Main interface with segmented navigation, All Issues view, and comments system
-//  Generated: 2025 OCT 25 1550
+//  Main interface with navigation stack and browser-style back button
+//  Generated: 2025 OCT 25 1640
 //
 
 import SwiftUI
@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var selectedIssue: Issue?
     
     @State private var selectedTab: NavigationTab = .repos
+    @State private var navigationStack: [NavigationState] = []
     @State private var showingSettings = false
     @State private var isLoadingRepos = false
     @State private var isLoadingIssues = false
@@ -27,18 +28,25 @@ struct ContentView: View {
         case repos, issues, wiki
     }
     
+    enum NavigationState {
+        case repositoryDetail(Repository)
+        case allIssues
+        case issueDetail(Issue, Repository)
+    }
+    
     var body: some View {
         NavigationSplitView {
-            // PANE B - Left sidebar with segmented control
+            // PANE B - Left sidebar with segmented control (NO "Navigation" LABEL)
             VStack(spacing: 0) {
-                // Segmented control for tab switching
-                Picker("Navigation", selection: $selectedTab) {
+                // Segmented control - label removed to save space
+                Picker("", selection: $selectedTab) {
                     Text("Repos").tag(NavigationTab.repos)
                     Text("Issues").tag(NavigationTab.issues)
                     Text("Wiki").tag(NavigationTab.wiki)
                 }
                 .pickerStyle(.segmented)
                 .padding()
+                .labelsHidden()
                 
                 // Content based on selected tab
                 switch selectedTab {
@@ -67,18 +75,8 @@ struct ContentView: View {
                 }
             }
         } detail: {
-            // PANE A - Main content area
-            if selectedTab == .issues || selectedIssue != nil {
-                if let issue = selectedIssue, let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
-                    issueDetailView(issue: issue, repository: repo)
-                } else {
-                    allIssuesView
-                }
-            } else if let repo = selectedRepository {
-                repositoryDetailView(repository: repo)
-            } else {
-                placeholderView
-            }
+            // PANE A - Main content area with navigation stack support
+            paneAContent
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(configManager: configManager)
@@ -96,11 +94,28 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Pane A Content Router
+    
+    @ViewBuilder
+    private var paneAContent: some View {
+        if let issue = selectedIssue, let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
+            issueDetailView(issue: issue, repository: repo)
+        } else if selectedTab == .issues {
+            allIssuesView
+        } else if let repo = selectedRepository {
+            repositoryDetailView(repository: repo)
+        } else {
+            placeholderView
+        }
+    }
+    
     // MARK: - Repository List View
     
     private var repositoryListView: some View {
         List(repositories, selection: $selectedRepository) { repo in
-            NavigationLink(value: repo) {
+            Button(action: {
+                navigateToRepository(repo)
+            }) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Image(systemName: "folder.fill")
@@ -130,6 +145,8 @@ struct ContentView: View {
                 }
                 .padding(.vertical, 4)
             }
+            .buttonStyle(.plain)
+            .background(selectedRepository?.id == repo.id ? Color.accentColor.opacity(0.2) : Color.clear)
         }
         .overlay {
             if isLoadingRepos {
@@ -150,7 +167,11 @@ struct ContentView: View {
         List(allIssues.sorted(by: { $0.createdAt < $1.createdAt }), // OLDER ON TOP
              id: \.id,
              selection: $selectedIssue) { issue in
-            Button(action: { selectedIssue = issue }) {
+            Button(action: {
+                if let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
+                    navigateToIssue(issue, repository: repo)
+                }
+            }) {
                 HStack {
                     Circle()
                         .fill(colorForStatus(issue.statusColor))
@@ -212,7 +233,11 @@ struct ContentView: View {
                     .padding(.top)
                 
                 ForEach(allIssues.sorted(by: { $0.createdAt > $1.createdAt }), id: \.id) { issue in // NEWER ON TOP
-                    Button(action: { selectedIssue = issue }) {
+                    Button(action: {
+                        if let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
+                            navigateToIssue(issue, repository: repo)
+                        }
+                    }) {
                         HStack(alignment: .top, spacing: 12) {
                             Circle()
                                 .fill(colorForStatus(issue.statusColor))
@@ -269,13 +294,13 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Issue Detail View
+    // MARK: - Issue Detail View with Navigation Stack Back Button
     
     private func issueDetailView(issue: Issue, repository: Repository) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Back button
-                Button(action: { selectedIssue = nil }) {
+                // BROWSER-STYLE BACK BUTTON
+                Button(action: navigateBack) {
                     HStack {
                         Image(systemName: "chevron.left")
                         Text("Back")
@@ -340,7 +365,7 @@ struct ContentView: View {
                             Task {
                                 do {
                                     try await gitHubService?.closeIssue(issue, repository: repository)
-                                    await fetchData() // Refresh data
+                                    await fetchData()
                                 } catch {
                                     errorMessage = error.localizedDescription
                                 }
@@ -352,7 +377,7 @@ struct ContentView: View {
                             Task {
                                 do {
                                     try await gitHubService?.reopenIssue(issue, repository: repository)
-                                    await fetchData() // Refresh data
+                                    await fetchData()
                                 } catch {
                                     errorMessage = error.localizedDescription
                                 }
@@ -362,7 +387,7 @@ struct ContentView: View {
                     }
                     
                     Button("View Comments") {
-                        // Navigate to comments view
+                        // Comments functionality preserved
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -376,7 +401,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Repository Detail View
+    // MARK: - Repository Detail View with Clickable Issue Count
     
     private func repositoryDetailView(repository: Repository) -> some View {
         ScrollView {
@@ -407,7 +432,7 @@ struct ContentView: View {
                 
                 Divider()
                 
-                // Repository stats
+                // Repository stats with CLICKABLE issue count
                 HStack(spacing: 30) {
                     if let language = repository.language {
                         VStack {
@@ -438,16 +463,23 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                     
-                    if let openIssues = repository.openIssuesCount {
-                        VStack {
-                            Text("\(openIssues)")
-                                .font(.title2)
-                                .bold()
-                                .foregroundStyle(openIssues > 0 ? .red : .primary)
-                            Text("Open Issues")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    // CLICKABLE OPEN ISSUES
+                    if let openIssues = repository.openIssuesCount, openIssues > 0 {
+                        Button(action: {
+                            navigateToRepositoryIssues(repository)
+                        }) {
+                            VStack {
+                                Text("\(openIssues)")
+                                    .font(.title2)
+                                    .bold()
+                                    .foregroundStyle(.red)
+                                Text("Open Issues")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
                     }
                 }
                 .padding()
@@ -482,6 +514,78 @@ struct ContentView: View {
             systemImage: "folder.badge.questionmark",
             description: Text("Choose a repository from the sidebar to view details")
         )
+    }
+    
+    // MARK: - Navigation Stack Functions
+    
+    private func navigateToRepository(_ repository: Repository) {
+        selectedRepository = repository
+        selectedIssue = nil
+        selectedTab = .repos
+    }
+    
+    private func navigateToIssue(_ issue: Issue, repository: Repository) {
+        // Push current state to stack
+        if let currentRepo = selectedRepository {
+            navigationStack.append(.repositoryDetail(currentRepo))
+        } else if selectedTab == .issues && selectedIssue == nil {
+            navigationStack.append(.allIssues)
+        }
+        
+        // Navigate to issue
+        selectedIssue = issue
+        selectedRepository = nil
+        selectedTab = .issues
+    }
+    
+    private func navigateToRepositoryIssues(_ repository: Repository) {
+        // Push current repository view to stack
+        navigationStack.append(.repositoryDetail(repository))
+        
+        // Get issues for this repository
+        let repoIssues = allIssues.filter { $0.repositoryName == repository.name && $0.isOpen }
+        
+        if repoIssues.count == 1 {
+            // Jump directly to the single issue
+            selectedIssue = repoIssues.first
+            selectedRepository = nil
+            selectedTab = .issues
+        } else if repoIssues.count > 1 {
+            // Show all issues for this repo
+            selectedIssue = nil
+            selectedRepository = nil
+            selectedTab = .issues
+        }
+    }
+    
+    private func navigateBack() {
+        guard !navigationStack.isEmpty else {
+            // No history - go to default view
+            selectedIssue = nil
+            selectedRepository = nil
+            selectedTab = .repos
+            return
+        }
+        
+        // Pop from stack
+        let previousState = navigationStack.removeLast()
+        
+        switch previousState {
+        case .repositoryDetail(let repo):
+            selectedIssue = nil
+            selectedRepository = repo
+            selectedTab = .repos
+            
+        case .allIssues:
+            selectedIssue = nil
+            selectedRepository = nil
+            selectedTab = .issues
+            
+        case .issueDetail(let issue, let repo):
+            selectedIssue = issue
+            selectedRepository = nil
+            selectedTab = .issues
+        }
     }
     
     // MARK: - Helper Functions
@@ -613,7 +717,7 @@ struct CommentsView: View {
         do {
             try await service.postComment(to: issue, repository: repository, body: newCommentText)
             newCommentText = ""
-            await loadComments() // Reload comments
+            await loadComments()
         } catch {
             print("Error posting comment: \(error)")
         }
