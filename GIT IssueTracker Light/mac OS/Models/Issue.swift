@@ -2,40 +2,48 @@
 //  Issue.swift
 //  GIT IssueTracker Light
 //
-//  GitHub issue data model
+//  GitHub Issue model with repository name tracking
+//  Generated: 2025 OCT 25 1545
 //
 
 import Foundation
 
-struct Issue: Codable, Identifiable, Hashable {
+struct Issue: Identifiable, Codable, Hashable {
     let id: Int
     let number: Int
     let title: String
     let body: String?
     let state: String
-    let user: IssueUser
     let createdAt: Date
     let updatedAt: Date
     let closedAt: Date?
-    let comments: Int?
-    let htmlUrl: String
+    let comments: Int
+    var repositoryName: String = ""
     
     enum CodingKeys: String, CodingKey {
-        case id, number, title, body, state, user, comments
+        case id, number, title, body, state, comments
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case closedAt = "closed_at"
-        case htmlUrl = "html_url"
     }
-}
-
-struct IssueUser: Codable, Hashable {
-    let login: String
-    let avatarUrl: String
     
-    enum CodingKeys: String, CodingKey {
-        case login
-        case avatarUrl = "avatar_url"
+    var isOpen: Bool {
+        state == "open"
+    }
+    
+    var isClosed: Bool {
+        state == "closed"
+    }
+    
+    // Color coding for QA workflow
+    var statusColor: String {
+        if isClosed {
+            return "green" // Resolved/archived
+        } else if comments > 0 {
+            return "yellow" // Active discussion
+        } else {
+            return "red" // New/untouched
+        }
     }
 }
 
@@ -43,16 +51,15 @@ struct IssueUser: Codable, Hashable {
 extension Issue {
     static let mock = Issue(
         id: 1,
-        number: 42,
-        title: "Sample Issue Title",
-        body: "This is a sample issue description with some details.",
+        number: 1,
+        title: "Sample Issue",
+        body: "This is a sample issue for testing",
         state: "open",
-        user: IssueUser(login: "fluhartyml", avatarUrl: "https://avatars.githubusercontent.com/u/961824"),
         createdAt: Date(),
         updatedAt: Date(),
         closedAt: nil,
-        comments: 5,
-        htmlUrl: "https://github.com/user/repo/issues/42"
+        comments: 3,
+        repositoryName: "sample-repo"
     )
 }
 

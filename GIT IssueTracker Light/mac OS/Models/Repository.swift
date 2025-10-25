@@ -2,20 +2,21 @@
 //  Repository.swift
 //  GIT IssueTracker Light
 //
-//  GitHub repository data model
+//  GitHub Repository model
+//  Generated: 2025 OCT 25 1546
 //
 
 import Foundation
 
-struct Repository: Codable, Identifiable, Hashable {
+struct Repository: Identifiable, Codable, Hashable {
     let id: Int
     let name: String
-    let fullName: String?
+    let fullName: String
     let description: String?
-    let htmlUrl: String?
+    let htmlUrl: String
     let language: String?
-    let stargazersCount: Int?
-    let forksCount: Int?
+    let stargazersCount: Int
+    let forksCount: Int
     let openIssuesCount: Int?
     
     enum CodingKeys: String, CodingKey {
@@ -42,4 +43,3 @@ extension Repository {
         openIssuesCount: 3
     )
 }
-

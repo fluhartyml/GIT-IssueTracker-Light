@@ -2,7 +2,8 @@
 //  GitHubService.swift
 //  GIT IssueTracker Light
 //
-//  GitHub API integration with QA issue tracking
+//  Complete GitHub API integration
+//  Generated: 2025 OCT 25 1548
 //
 
 import Foundation
@@ -54,14 +55,12 @@ class GitHubService {
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
-        
         do {
-            let repos = try decoder.decode([Repository].self, from: data)
-            print("â Successfully decoded \(repos.count) repositories")
-            return repos
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let repositories = try decoder.decode([Repository].self, from: data)
+            print("â Fetched \(repositories.count) repositories")
+            return repositories
         } catch {
             print("â Decoding error: \(error)")
             throw GitHubError.decodingError(error)
@@ -75,7 +74,9 @@ class GitHubService {
             throw GitHubError.noToken
         }
         
-        let urlString = "https://api.github.com/repos/\(repository.fullName)/issues?state=\(state)&per_page=100"
+        let owner = repository.fullName.components(separatedBy: "/")[0]
+        let repo = repository.name
+        let urlString = "https://api.github.com/repos/\(owner)/\(repo)/issues?state=\(state)&per_page=100"
         
         guard let url = URL(string: urlString) else {
             throw GitHubError.invalidURL
@@ -86,7 +87,7 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         
-        print("ð Fetching issues for \(repository.name)")
+        print("ð Fetching issues for \(repo)")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -99,13 +100,17 @@ class GitHubService {
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
-        
         do {
-            let issues = try decoder.decode([Issue].self, from: data)
-            print("â Successfully decoded \(issues.count) issues for \(repository.name)")
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var issues = try decoder.decode([Issue].self, from: data)
+            
+            // Add repository name to each issue
+            for index in issues.indices {
+                issues[index].repositoryName = repository.name
+            }
+            
+            print("â Fetched \(issues.count) issues from \(repo)")
             return issues
         } catch {
             print("â Decoding error: \(error)")
@@ -113,14 +118,35 @@ class GitHubService {
         }
     }
     
+    // MARK: - Fetch All Issues Across All Repos
+    
+    func fetchAllIssues(from repositories: [Repository]) async throws -> [Issue] {
+        var allIssues: [Issue] = []
+        
+        for repo in repositories {
+            do {
+                let issues = try await fetchIssues(for: repo, state: "all")
+                allIssues.append(contentsOf: issues)
+            } catch {
+                print("â ï¸ Failed to fetch issues for \(repo.name): \(error)")
+                // Continue with other repos even if one fails
+            }
+        }
+        
+        print("â Fetched total of \(allIssues.count) issues across all repos")
+        return allIssues
+    }
+    
     // MARK: - Fetch Comments
     
-    func fetchComments(repository: Repository, issueNumber: Int) async throws -> [Comment] {
+    func fetchComments(for issue: Issue, repository: Repository) async throws -> [Comment] {
         guard !configManager.config.github.token.isEmpty else {
             throw GitHubError.noToken
         }
         
-        let urlString = "https://api.github.com/repos/\(repository.fullName)/issues/\(issueNumber)/comments"
+        let owner = repository.fullName.components(separatedBy: "/")[0]
+        let repo = repository.name
+        let urlString = "https://api.github.com/repos/\(owner)/\(repo)/issues/\(issue.number)/comments"
         
         guard let url = URL(string: urlString) else {
             throw GitHubError.invalidURL
@@ -131,7 +157,7 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         
-        print("ð¬ Fetching comments for issue #\(issueNumber) in \(repository.name)")
+        print("ð Fetching comments for issue #\(issue.number)")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -144,13 +170,11 @@ class GitHubService {
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
-        
         do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
             let comments = try decoder.decode([Comment].self, from: data)
-            print("â Successfully decoded \(comments.count) comments")
+            print("â Fetched \(comments.count) comments")
             return comments
         } catch {
             print("â Decoding error: \(error)")
@@ -158,14 +182,16 @@ class GitHubService {
         }
     }
     
-    // MARK: - Add Comment
+    // MARK: - Post Comment
     
-    func addComment(repository: Repository, issueNumber: Int, body: String) async throws {
+    func postComment(to issue: Issue, repository: Repository, body: String) async throws {
         guard !configManager.config.github.token.isEmpty else {
             throw GitHubError.noToken
         }
         
-        let urlString = "https://api.github.com/repos/\(repository.fullName)/issues/\(issueNumber)/comments"
+        let owner = repository.fullName.components(separatedBy: "/")[0]
+        let repo = repository.name
+        let urlString = "https://api.github.com/repos/\(owner)/\(repo)/issues/\(issue.number)/comments"
         
         guard let url = URL(string: urlString) else {
             throw GitHubError.invalidURL
@@ -178,10 +204,10 @@ class GitHubService {
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let payload: [String: String] = ["body": body]
-        request.httpBody = try JSONEncoder().encode(payload)
+        let commentBody = ["body": body]
+        request.httpBody = try JSONEncoder().encode(commentBody)
         
-        print("ð¬ Adding comment to issue #\(issueNumber) in \(repository.name)")
+        print("ð Posting comment to issue #\(issue.number)")
         
         let (_, response) = try await URLSession.shared.data(for: request)
         
@@ -194,17 +220,31 @@ class GitHubService {
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        print("â Successfully added comment to issue #\(issueNumber)")
+        print("â Comment posted successfully")
     }
     
-    // MARK: - Close/Reopen Issue
+    // MARK: - Close Issue
     
-    func updateIssueState(repository: Repository, issueNumber: Int, state: String) async throws {
+    func closeIssue(_ issue: Issue, repository: Repository) async throws {
+        try await updateIssueState(issue, repository: repository, state: "closed")
+    }
+    
+    // MARK: - Reopen Issue
+    
+    func reopenIssue(_ issue: Issue, repository: Repository) async throws {
+        try await updateIssueState(issue, repository: repository, state: "open")
+    }
+    
+    // MARK: - Update Issue State
+    
+    private func updateIssueState(_ issue: Issue, repository: Repository, state: String) async throws {
         guard !configManager.config.github.token.isEmpty else {
             throw GitHubError.noToken
         }
         
-        let urlString = "https://api.github.com/repos/\(repository.fullName)/issues/\(issueNumber)"
+        let owner = repository.fullName.components(separatedBy: "/")[0]
+        let repo = repository.name
+        let urlString = "https://api.github.com/repos/\(owner)/\(repo)/issues/\(issue.number)"
         
         guard let url = URL(string: urlString) else {
             throw GitHubError.invalidURL
@@ -217,10 +257,10 @@ class GitHubService {
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let payload: [String: String] = ["state": state]
-        request.httpBody = try JSONEncoder().encode(payload)
+        let updateBody = ["state": state]
+        request.httpBody = try JSONEncoder().encode(updateBody)
         
-        print("ð Updating issue #\(issueNumber) state to: \(state)")
+        print("ð Updating issue #\(issue.number) to \(state)")
         
         let (_, response) = try await URLSession.shared.data(for: request)
         
@@ -233,54 +273,7 @@ class GitHubService {
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        print("â Successfully \(state == "closed" ? "closed" : "reopened") issue #\(issueNumber)")
-    }
-    
-    // MARK: - Create Issue
-    
-    func createIssue(repository: Repository, title: String, body: String, labels: [String] = []) async throws {
-        guard !configManager.config.github.token.isEmpty else {
-            throw GitHubError.noToken
-        }
-        
-        let urlString = "https://api.github.com/repos/\(repository.fullName)/issues"
-        
-        guard let url = URL(string: urlString) else {
-            throw GitHubError.invalidURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(configManager.config.github.token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        var payload: [String: Any] = [
-            "title": title,
-            "body": body
-        ]
-        
-        if !labels.isEmpty {
-            payload["labels"] = labels
-        }
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        
-        print("â Creating new issue: '\(title)' in \(repository.name)")
-        
-        let (_, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GitHubError.invalidResponse
-        }
-        
-        guard httpResponse.statusCode == 201 else {
-            print("â HTTP Error: \(httpResponse.statusCode)")
-            throw GitHubError.httpError(httpResponse.statusCode)
-        }
-        
-        print("â Successfully created issue '\(title)'")
+        print("â Issue \(state) successfully")
     }
 }
 
@@ -302,3 +295,4 @@ extension GitHubError: LocalizedError {
         }
     }
 }
+

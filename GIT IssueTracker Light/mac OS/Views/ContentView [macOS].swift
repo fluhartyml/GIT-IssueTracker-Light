@@ -1,8 +1,9 @@
 //
-//  ContentView[macOS].swift
+//  ContentView.swift
 //  GIT IssueTracker Light
 //
-//  Main interface with repository and issue management
+//  Main interface with segmented navigation, All Issues view, and comments system
+//  Generated: 2025 OCT 25 1550
 //
 
 import SwiftUI
@@ -12,517 +13,652 @@ struct ContentView: View {
     @State private var gitHubService: GitHubService?
     
     @State private var repositories: [Repository] = []
+    @State private var allIssues: [Issue] = []
     @State private var selectedRepository: Repository?
-    @State private var issues: [Issue] = []
     @State private var selectedIssue: Issue?
     
+    @State private var selectedTab: NavigationTab = .repos
+    @State private var showingSettings = false
     @State private var isLoadingRepos = false
     @State private var isLoadingIssues = false
     @State private var errorMessage: String?
-    @State private var showingSettings = false
+    
+    enum NavigationTab {
+        case repos, issues, wiki
+    }
     
     var body: some View {
         NavigationSplitView {
-            // MARK: - Sidebar (Repositories & Issues)
-            List(selection: $selectedRepository) {
-                Section("Repositories") {
-                    if isLoadingRepos {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else if repositories.isEmpty {
-                        Text("No repositories found")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(repositories) { repo in
-                            RepositoryRow(repository: repo)
-                                .tag(repo)
-                        }
-                    }
+            // PANE B - Left sidebar with segmented control
+            VStack(spacing: 0) {
+                // Segmented control for tab switching
+                Picker("Navigation", selection: $selectedTab) {
+                    Text("Repos").tag(NavigationTab.repos)
+                    Text("Issues").tag(NavigationTab.issues)
+                    Text("Wiki").tag(NavigationTab.wiki)
                 }
+                .pickerStyle(.segmented)
+                .padding()
                 
-                if let repo = selectedRepository {
-                    Section("Issues - \(repo.name)") {
-                        if isLoadingIssues {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                        } else if issues.isEmpty {
-                            Text("No issues found")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(issues) { issue in
-                                IssueRow(issue: issue)
-                                    .tag(issue)
-                                    .onTapGesture {
-                                        selectedIssue = issue
-                                    }
-                            }
-                        }
-                    }
+                // Content based on selected tab
+                switch selectedTab {
+                case .repos:
+                    repositoryListView
+                case .issues:
+                    issueNavigatorView
+                case .wiki:
+                    Text("Wiki - Coming Soon")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .navigationTitle("Git IssueTracker Lite")
+            .navigationTitle("GIT IssueTracker Light")
             .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    Button {
-                        Task {
-                            await loadRepositories()
-                        }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "gear")
+                    }
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button(action: { Task { await fetchData() } }) {
+                        Image(systemName: "arrow.clockwise")
                     }
                     .disabled(isLoadingRepos)
                 }
-                
-                ToolbarItem {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Label("Settings", systemImage: "gear")
-                    }
-                }
             }
-            
         } detail: {
-            // MARK: - Detail View
-            if let issue = selectedIssue, let repo = selectedRepository {
-                IssueDetailView(
-                    issue: issue,
-                    repository: repo,
-                    gitHubService: gitHubService!
-                )
+            // PANE A - Main content area
+            if selectedTab == .issues || selectedIssue != nil {
+                if let issue = selectedIssue, let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
+                    issueDetailView(issue: issue, repository: repo)
+                } else {
+                    allIssuesView
+                }
             } else if let repo = selectedRepository {
-                RepositoryDetailView(repository: repo)
+                repositoryDetailView(repository: repo)
             } else {
-                ContentUnavailableView(
-                    "Select a Repository",
-                    systemImage: "folder",
-                    description: Text("Choose a repository from the sidebar to view its issues")
-                )
+                placeholderView
             }
         }
         .sheet(isPresented: $showingSettings) {
-            PathSettingsView(configManager: configManager)
+            SettingsView(configManager: configManager)
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") {
-                errorMessage = nil
-            }
+            Button("OK") { errorMessage = nil }
         } message: {
-            if let error = errorMessage {
-                Text(error)
-            }
+            Text(errorMessage ?? "")
         }
-        .onAppear {
+        .task {
             gitHubService = GitHubService(configManager: configManager)
-            Task {
-                await loadRepositories()
+            if !configManager.config.github.token.isEmpty {
+                await fetchData()
             }
-        }
-        .onChange(of: selectedRepository) { oldValue, newValue in
-            if let repo = newValue {
-                Task {
-                    await loadIssues(for: repo)
-                }
-            } else {
-                issues = []
-                selectedIssue = nil
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenSettings"))) { _ in
-            showingSettings = true
         }
     }
     
-    // MARK: - Load Data
+    // MARK: - Repository List View
     
-    func loadRepositories() async {
+    private var repositoryListView: some View {
+        List(repositories, selection: $selectedRepository) { repo in
+            NavigationLink(value: repo) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(.blue)
+                        Text(repo.name)
+                            .font(.headline)
+                    }
+                    
+                    if let description = repo.description {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    
+                    HStack(spacing: 12) {
+                        if let language = repo.language {
+                            Label(language, systemImage: "chevron.left.forwardslash.chevron.right")
+                                .font(.caption2)
+                        }
+                        if let openIssues = repo.openIssuesCount, openIssues > 0 {
+                            Label("\(openIssues)", systemImage: "exclamationmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .overlay {
+            if isLoadingRepos {
+                ProgressView("Loading repositories...")
+            } else if repositories.isEmpty {
+                ContentUnavailableView(
+                    "No Repositories",
+                    systemImage: "folder.badge.questionmark",
+                    description: Text("Configure your GitHub credentials in settings")
+                )
+            }
+        }
+    }
+    
+    // MARK: - Issue Navigator View (Pane B - older on top)
+    
+    private var issueNavigatorView: some View {
+        List(allIssues.sorted(by: { $0.createdAt < $1.createdAt }), // OLDER ON TOP
+             id: \.id,
+             selection: $selectedIssue) { issue in
+            Button(action: { selectedIssue = issue }) {
+                HStack {
+                    Circle()
+                        .fill(colorForStatus(issue.statusColor))
+                        .frame(width: 8, height: 8)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("#\(issue.number) - \(issue.title)")
+                            .font(.headline)
+                            .lineLimit(1)
+                        
+                        Text(issue.repositoryName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        HStack {
+                            if issue.comments > 0 {
+                                Label("\(issue.comments)", systemImage: "bubble.left")
+                                    .font(.caption2)
+                            }
+                            Text(issue.createdAt, style: .relative)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    if issue.isClosed {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .background(selectedIssue?.id == issue.id ? Color.accentColor.opacity(0.2) : Color.clear)
+        }
+        .overlay {
+            if isLoadingIssues {
+                ProgressView("Loading issues...")
+            } else if allIssues.isEmpty {
+                ContentUnavailableView(
+                    "No Issues",
+                    systemImage: "checklist",
+                    description: Text("No issues found across your repositories")
+                )
+            }
+        }
+    }
+    
+    // MARK: - All Issues View (Pane A - newer on top)
+    
+    private var allIssuesView: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                Text("All Issues")
+                    .font(.largeTitle)
+                    .bold()
+                    .padding(.horizontal)
+                    .padding(.top)
+                
+                ForEach(allIssues.sorted(by: { $0.createdAt > $1.createdAt }), id: \.id) { issue in // NEWER ON TOP
+                    Button(action: { selectedIssue = issue }) {
+                        HStack(alignment: .top, spacing: 12) {
+                            Circle()
+                                .fill(colorForStatus(issue.statusColor))
+                                .frame(width: 12, height: 12)
+                                .padding(.top, 4)
+                            
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("#\(issue.number)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(issue.repositoryName)
+                                        .font(.caption)
+                                        .foregroundStyle(.blue)
+                                    Spacer()
+                                    if issue.isClosed {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                            .font(.caption)
+                                    }
+                                }
+                                
+                                Text(issue.title)
+                                    .font(.headline)
+                                    .multilineTextAlignment(.leading)
+                                
+                                HStack {
+                                    if issue.comments > 0 {
+                                        Label("\(issue.comments) comments", systemImage: "bubble.left")
+                                            .font(.caption)
+                                    }
+                                    Text("Created " + issue.createdAt.formatted(date: .abbreviated, time: .omitted))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                        }
+                        .padding()
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal)
+            }
+            .padding(.bottom)
+        }
+        .overlay {
+            if isLoadingIssues {
+                ProgressView("Loading issues...")
+            }
+        }
+    }
+    
+    // MARK: - Issue Detail View
+    
+    private func issueDetailView(issue: Issue, repository: Repository) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Back button
+                Button(action: { selectedIssue = nil }) {
+                    HStack {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal)
+                .padding(.top)
+                
+                // Issue header
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Circle()
+                            .fill(colorForStatus(issue.statusColor))
+                            .frame(width: 12, height: 12)
+                        Text("#\(issue.number)")
+                            .font(.title2)
+                            .bold()
+                        Text(repository.name)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if issue.isClosed {
+                            Label("Closed", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Open", systemImage: "exclamationmark.circle.fill")
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    
+                    Text(issue.title)
+                        .font(.title)
+                        .bold()
+                    
+                    Text("Created " + issue.createdAt.formatted(date: .long, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal)
+                
+                Divider()
+                
+                // Issue body
+                if let body = issue.body, !body.isEmpty {
+                    Text(body)
+                        .padding(.horizontal)
+                        .textSelection(.enabled)
+                } else {
+                    Text("No description provided")
+                        .foregroundStyle(.secondary)
+                        .italic()
+                        .padding(.horizontal)
+                }
+                
+                Divider()
+                
+                // Action buttons
+                HStack {
+                    if issue.isOpen {
+                        Button("Close Issue") {
+                            Task {
+                                do {
+                                    try await gitHubService?.closeIssue(issue, repository: repository)
+                                    await fetchData() // Refresh data
+                                } catch {
+                                    errorMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Button("Reopen Issue") {
+                            Task {
+                                do {
+                                    try await gitHubService?.reopenIssue(issue, repository: repository)
+                                    await fetchData() // Refresh data
+                                } catch {
+                                    errorMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    
+                    Button("View Comments") {
+                        // Navigate to comments view
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal)
+                
+                Divider()
+                
+                // Comments section
+                CommentsView(issue: issue, repository: repository, gitHubService: gitHubService)
+            }
+        }
+    }
+    
+    // MARK: - Repository Detail View
+    
+    private func repositoryDetailView(repository: Repository) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Repository header
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .font(.largeTitle)
+                            .foregroundStyle(.blue)
+                        
+                        VStack(alignment: .leading) {
+                            Text(repository.name)
+                                .font(.title)
+                                .bold()
+                            Text(repository.fullName)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    if let description = repository.description {
+                        Text(description)
+                            .padding(.top, 4)
+                    }
+                }
+                .padding()
+                
+                Divider()
+                
+                // Repository stats
+                HStack(spacing: 30) {
+                    if let language = repository.language {
+                        VStack {
+                            Text(language)
+                                .font(.title2)
+                                .bold()
+                            Text("Language")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    VStack {
+                        Text("\(repository.stargazersCount)")
+                            .font(.title2)
+                            .bold()
+                        Text("Stars")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    VStack {
+                        Text("\(repository.forksCount)")
+                            .font(.title2)
+                            .bold()
+                        Text("Forks")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    if let openIssues = repository.openIssuesCount {
+                        VStack {
+                            Text("\(openIssues)")
+                                .font(.title2)
+                                .bold()
+                                .foregroundStyle(openIssues > 0 ? .red : .primary)
+                            Text("Open Issues")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding()
+                
+                Divider()
+                
+                // Action buttons
+                VStack(spacing: 12) {
+                    Button("Open on GitHub") {
+                        if let url = URL(string: repository.htmlUrl) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    
+                    Button("Copy Clone URL") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(repository.htmlUrl + ".git", forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding()
+            }
+        }
+    }
+    
+    // MARK: - Placeholder View
+    
+    private var placeholderView: some View {
+        ContentUnavailableView(
+            "Select a Repository",
+            systemImage: "folder.badge.questionmark",
+            description: Text("Choose a repository from the sidebar to view details")
+        )
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func colorForStatus(_ status: String) -> Color {
+        switch status {
+        case "red": return .red
+        case "yellow": return .yellow
+        case "green": return .green
+        default: return .gray
+        }
+    }
+    
+    private func fetchData() async {
         guard let service = gitHubService else { return }
         
         isLoadingRepos = true
-        errorMessage = nil
         
         do {
             repositories = try await service.fetchRepositories()
+            
+            isLoadingIssues = true
+            allIssues = try await service.fetchAllIssues(from: repositories)
+            isLoadingIssues = false
         } catch {
             errorMessage = error.localizedDescription
         }
         
         isLoadingRepos = false
     }
-    
-    func loadIssues(for repository: Repository) async {
-        guard let service = gitHubService else { return }
-        
-        isLoadingIssues = true
-        errorMessage = nil
-        
-        do {
-            issues = try await service.fetchIssues(for: repository, state: "all")
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        
-        isLoadingIssues = false
-    }
 }
 
-// MARK: - Repository Row
+// MARK: - Comments View
 
-struct RepositoryRow: View {
-    let repository: Repository
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(repository.name)
-                .font(.headline)
-            
-            if let description = repository.description {
-                Text(description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            
-            HStack(spacing: 12) {
-                if let stars = repository.stargazersCount {
-                    Label("\(stars)", systemImage: "star.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                
-                if let language = repository.language {
-                    Text(language)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-// MARK: - Issue Row
-
-struct IssueRow: View {
-    let issue: Issue
-    
-    var statusColor: Color {
-        switch issue.state {
-        case "open":
-            return .green
-        case "closed":
-            return .red
-        default:
-            return .gray
-        }
-    }
-    
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(issue.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                
-                HStack(spacing: 8) {
-                    Text("#\(issue.number)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    
-                    Text("by \(issue.user.login)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    
-                    if let comments = issue.comments, comments > 0 {
-                        Label("\(comments)", systemImage: "bubble.left")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-// MARK: - Repository Detail View
-
-struct RepositoryDetailView: View {
-    let repository: Repository
-    
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(repository.name)
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    
-                    if let description = repository.description {
-                        Text(description)
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                
-                Divider()
-                
-                // Stats
-                HStack(spacing: 24) {
-                    if let stars = repository.stargazersCount {
-                        StatView(label: "Stars", value: "\(stars)", icon: "star.fill")
-                    }
-                    if let forks = repository.forksCount {
-                        StatView(label: "Forks", value: "\(forks)", icon: "tuningfork")
-                    }
-                    if let issues = repository.openIssuesCount {
-                        StatView(label: "Open Issues", value: "\(issues)", icon: "exclamationmark.circle")
-                    }
-                }
-                
-                Divider()
-                
-                // Links
-                VStack(alignment: .leading, spacing: 8) {
-                    if let language = repository.language {
-                        Label(language, systemImage: "chevron.left.forwardslash.chevron.right")
-                    }
-                    
-                    if let htmlUrl = repository.htmlUrl, let url = URL(string: htmlUrl) {
-                        Link(destination: url) {
-                            Label("View on GitHub", systemImage: "link")
-                        }
-                    }
-                }
-                
-                Spacer()
-            }
-            .padding()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
-
-struct StatView: View {
-    let label: String
-    let value: String
-    let icon: String
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            Label(value, systemImage: icon)
-                .font(.title2)
-                .fontWeight(.bold)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-// MARK: - Issue Detail View
-
-struct IssueDetailView: View {
+struct CommentsView: View {
     let issue: Issue
     let repository: Repository
-    let gitHubService: GitHubService
+    let gitHubService: GitHubService?
     
     @State private var comments: [Comment] = []
-    @State private var isLoadingComments = false
     @State private var newCommentText = ""
+    @State private var isLoadingComments = false
     @State private var isPostingComment = false
-    @State private var errorMessage: String?
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Issue Header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("#\(issue.number)")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Comments (\(comments.count))")
+                .font(.headline)
+                .padding(.horizontal)
+            
+            if isLoadingComments {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+            } else if comments.isEmpty {
+                Text("No comments yet")
+                    .foregroundStyle(.secondary)
+                    .italic()
+                    .padding(.horizontal)
+            } else {
+                ForEach(comments) { comment in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(comment.user.login)
+                                .font(.headline)
+                            Text(comment.createdAt, style: .relative)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         
-                        Spacer()
-                        
-                        StatusBadge(state: issue.state)
+                        Text(comment.body)
+                            .textSelection(.enabled)
                     }
-                    
-                    Text(issue.title)
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    
-                    HStack(spacing: 12) {
-                        Label(issue.user.login, systemImage: "person.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
-                        Text(issue.createdAt.formatted(date: .abbreviated, time: .omitted))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    .padding()
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
                 }
+            }
+            
+            Divider()
+            
+            // New comment input
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Add Comment")
+                    .font(.headline)
                 
-                Divider()
+                TextEditor(text: $newCommentText)
+                    .frame(minHeight: 100)
+                    .border(Color.gray.opacity(0.3))
                 
-                // Issue Body
-                if let body = issue.body, !body.isEmpty {
-                    Text(body)
-                        .textSelection(.enabled)
-                } else {
-                    Text("No description provided")
-                        .foregroundStyle(.secondary)
-                        .italic()
-                }
-                
-                Divider()
-                
-                // Comments Section
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Comments (\(comments.count))")
-                        .font(.headline)
-                    
-                    if isLoadingComments {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else if comments.isEmpty {
-                        Text("No comments yet")
-                            .foregroundStyle(.secondary)
-                            .italic()
-                    } else {
-                        ForEach(comments) { comment in
-                            CommentView(comment: comment)
+                HStack {
+                    Spacer()
+                    Button("Post Comment") {
+                        Task {
+                            await postComment()
                         }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPostingComment)
                 }
-                
-                Divider()
-                
-                // Add Comment
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Add Comment")
-                        .font(.headline)
-                    
-                    TextEditor(text: $newCommentText)
-                        .frame(minHeight: 100)
-                        .border(Color.secondary.opacity(0.3))
-                    
-                    HStack {
-                        Spacer()
-                        
-                        Button("Post Comment") {
-                            Task {
-                                await postComment()
-                            }
-                        }
-                        .disabled(newCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPostingComment)
-                    }
-                }
-                
-                Spacer()
             }
             .padding()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            Task {
-                await loadComments()
-            }
-        }
-        .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") {
-                errorMessage = nil
-            }
-        } message: {
-            if let error = errorMessage {
-                Text(error)
-            }
+        .task {
+            await loadComments()
         }
     }
     
-    func loadComments() async {
+    private func loadComments() async {
+        guard let service = gitHubService else { return }
+        
         isLoadingComments = true
         
         do {
-            comments = try await gitHubService.fetchComments(repository: repository, issueNumber: issue.number)
+            comments = try await service.fetchComments(for: issue, repository: repository)
         } catch {
-            errorMessage = error.localizedDescription
+            print("Error loading comments: \(error)")
         }
         
         isLoadingComments = false
     }
     
-    func postComment() async {
-        let trimmedText = newCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return }
+    private func postComment() async {
+        guard let service = gitHubService else { return }
+        guard !newCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
         isPostingComment = true
         
         do {
-            try await gitHubService.addComment(repository: repository, issueNumber: issue.number, body: trimmedText)
+            try await service.postComment(to: issue, repository: repository, body: newCommentText)
             newCommentText = ""
-            await loadComments() // Reload to show new comment
+            await loadComments() // Reload comments
         } catch {
-            errorMessage = error.localizedDescription
+            print("Error posting comment: \(error)")
         }
         
         isPostingComment = false
     }
 }
 
-// MARK: - Status Badge
+// MARK: - Settings View
 
-struct StatusBadge: View {
-    let state: String
-    
-    var color: Color {
-        state == "open" ? .green : .red
-    }
+struct SettingsView: View {
+    @Environment(\.dismiss) var dismiss
+    @Bindable var configManager: ConfigManager
     
     var body: some View {
-        Text(state.capitalized)
-            .font(.caption)
-            .fontWeight(.semibold)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.2))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
-    }
-}
-
-// MARK: - Comment View
-
-struct CommentView: View {
-    let comment: Comment
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label(comment.user.login, systemImage: "person.fill")
-                    .font(.caption)
-                    .fontWeight(.semibold)
+        Form {
+            Section("GitHub Credentials") {
+                TextField("Username", text: $configManager.config.github.username)
+                SecureField("Personal Access Token", text: $configManager.config.github.token)
                 
-                Text(comment.createdAt.formatted(date: .abbreviated, time: .shortened))
+                Text("Generate a token at: github.com/settings/tokens")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             
-            Text(comment.body)
-                .textSelection(.enabled)
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Button("Save") {
+                    configManager.save()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
         }
         .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(width: 500, height: 250)
     }
 }
 
 #Preview {
     ContentView()
 }
+

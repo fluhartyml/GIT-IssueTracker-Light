@@ -2,56 +2,62 @@
 //  ConfigManager.swift
 //  GIT IssueTracker Light
 //
-//  Manages app configuration and GitHub credentials
+//  Secure configuration management for GitHub credentials
+//  Generated: 2025 OCT 25 1547
 //
 
 import Foundation
 
+struct GitHubConfig: Codable {
+    var username: String = ""
+    var token: String = ""
+}
+
 struct AppConfig: Codable {
-    var github: GitHubConfig
-    
-    struct GitHubConfig: Codable {
-        var username: String
-        var token: String
-    }
+    var github: GitHubConfig = GitHubConfig()
 }
 
 @Observable
 class ConfigManager {
     var config: AppConfig
     
-    private let configURL: URL
-    
-    init() {
-        // Store config in Application Support directory
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    private let configFileURL: URL = {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first!
+        
         let appFolder = appSupport.appendingPathComponent("GIT IssueTracker Light")
         
-        // Create folder if it doesn't exist
-        try? FileManager.default.createDirectory(at: appFolder, withIntermediateDirectories: true)
+        // Create directory if it doesn't exist
+        try? FileManager.default.createDirectory(
+            at: appFolder,
+            withIntermediateDirectories: true
+        )
         
-        configURL = appFolder.appendingPathComponent("config.json")
-        
-        // Load existing config or create default
-        if let data = try? Data(contentsOf: configURL),
-           let loadedConfig = try? JSONDecoder().decode(AppConfig.self, from: data) {
-            self.config = loadedConfig
+        return appFolder.appendingPathComponent("config.json")
+    }()
+    
+    init() {
+        if let data = try? Data(contentsOf: configFileURL),
+           let decoded = try? JSONDecoder().decode(AppConfig.self, from: data) {
+            self.config = decoded
+            print("â Config loaded from: \(configFileURL.path)")
         } else {
-            self.config = AppConfig(
-                github: AppConfig.GitHubConfig(
-                    username: "",
-                    token: ""
-                )
-            )
+            self.config = AppConfig()
+            print("ð Using default config, will save to: \(configFileURL.path)")
         }
     }
     
     func save() {
         do {
-            let data = try JSONEncoder().encode(config)
-            try data.write(to: configURL)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(config)
+            try data.write(to: configFileURL)
+            print("â Config saved successfully")
         } catch {
-            print("Failed to save config: \(error)")
+            print("â Failed to save config: \(error)")
         }
     }
 }
