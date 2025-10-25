@@ -2,8 +2,8 @@
 //  GitHubService.swift
 //  GIT IssueTracker Light
 //
-//  Complete GitHub API integration
-//  Generated: 2025 OCT 25 1548
+//  Complete GitHub API integration with create issue support
+//  Generated: 2025 OCT 25 1610
 //
 
 import Foundation
@@ -42,7 +42,7 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         
-        print("ð Fetching repositories for user: \(username)")
+        print("🔍 Fetching repositories for user: \(username)")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -51,7 +51,7 @@ class GitHubService {
         }
         
         guard httpResponse.statusCode == 200 else {
-            print("â HTTP Error: \(httpResponse.statusCode)")
+            print("❌ HTTP Error: \(httpResponse.statusCode)")
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
@@ -59,10 +59,10 @@ class GitHubService {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let repositories = try decoder.decode([Repository].self, from: data)
-            print("â Fetched \(repositories.count) repositories")
+            print("✅ Fetched \(repositories.count) repositories")
             return repositories
         } catch {
-            print("â Decoding error: \(error)")
+            print("❌ Decoding error: \(error)")
             throw GitHubError.decodingError(error)
         }
     }
@@ -87,7 +87,7 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         
-        print("ð Fetching issues for \(repo)")
+        print("🔍 Fetching issues for \(repo)")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -96,7 +96,7 @@ class GitHubService {
         }
         
         guard httpResponse.statusCode == 200 else {
-            print("â HTTP Error: \(httpResponse.statusCode)")
+            print("❌ HTTP Error: \(httpResponse.statusCode)")
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
@@ -110,10 +110,10 @@ class GitHubService {
                 issues[index].repositoryName = repository.name
             }
             
-            print("â Fetched \(issues.count) issues from \(repo)")
+            print("✅ Fetched \(issues.count) issues from \(repo)")
             return issues
         } catch {
-            print("â Decoding error: \(error)")
+            print("❌ Decoding error: \(error)")
             throw GitHubError.decodingError(error)
         }
     }
@@ -128,13 +128,58 @@ class GitHubService {
                 let issues = try await fetchIssues(for: repo, state: "all")
                 allIssues.append(contentsOf: issues)
             } catch {
-                print("â ï¸ Failed to fetch issues for \(repo.name): \(error)")
+                print("⚠️ Failed to fetch issues for \(repo.name): \(error)")
                 // Continue with other repos even if one fails
             }
         }
         
-        print("â Fetched total of \(allIssues.count) issues across all repos")
+        print("✅ Fetched total of \(allIssues.count) issues across all repos")
         return allIssues
+    }
+    
+    // MARK: - Create Issue
+    
+    func createIssue(in repository: Repository, title: String, body: String?) async throws {
+        guard !configManager.config.github.token.isEmpty else {
+            throw GitHubError.noToken
+        }
+        
+        let owner = repository.fullName.components(separatedBy: "/")[0]
+        let repo = repository.name
+        let urlString = "https://api.github.com/repos/\(owner)/\(repo)/issues"
+        
+        guard let url = URL(string: urlString) else {
+            throw GitHubError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(configManager.config.github.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        var issueData: [String: Any] = ["title": title]
+        if let body = body {
+            issueData["body"] = body
+        }
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: issueData)
+        
+        print("📝 Creating issue in \(repo): \(title)")
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GitHubError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 201 else {
+            print("❌ HTTP Error: \(httpResponse.statusCode)")
+            throw GitHubError.httpError(httpResponse.statusCode)
+        }
+        
+        print("✅ Issue created successfully")
     }
     
     // MARK: - Fetch Comments
@@ -157,7 +202,7 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         
-        print("ð Fetching comments for issue #\(issue.number)")
+        print("🔍 Fetching comments for issue #\(issue.number)")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -166,7 +211,7 @@ class GitHubService {
         }
         
         guard httpResponse.statusCode == 200 else {
-            print("â HTTP Error: \(httpResponse.statusCode)")
+            print("❌ HTTP Error: \(httpResponse.statusCode)")
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
@@ -174,10 +219,10 @@ class GitHubService {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let comments = try decoder.decode([Comment].self, from: data)
-            print("â Fetched \(comments.count) comments")
+            print("✅ Fetched \(comments.count) comments")
             return comments
         } catch {
-            print("â Decoding error: \(error)")
+            print("❌ Decoding error: \(error)")
             throw GitHubError.decodingError(error)
         }
     }
@@ -207,7 +252,7 @@ class GitHubService {
         let commentBody = ["body": body]
         request.httpBody = try JSONEncoder().encode(commentBody)
         
-        print("ð Posting comment to issue #\(issue.number)")
+        print("📝 Posting comment to issue #\(issue.number)")
         
         let (_, response) = try await URLSession.shared.data(for: request)
         
@@ -216,11 +261,11 @@ class GitHubService {
         }
         
         guard httpResponse.statusCode == 201 else {
-            print("â HTTP Error: \(httpResponse.statusCode)")
+            print("❌ HTTP Error: \(httpResponse.statusCode)")
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        print("â Comment posted successfully")
+        print("✅ Comment posted successfully")
     }
     
     // MARK: - Close Issue
@@ -260,7 +305,7 @@ class GitHubService {
         let updateBody = ["state": state]
         request.httpBody = try JSONEncoder().encode(updateBody)
         
-        print("ð Updating issue #\(issue.number) to \(state)")
+        print("🔄 Updating issue #\(issue.number) to \(state)")
         
         let (_, response) = try await URLSession.shared.data(for: request)
         
@@ -269,11 +314,11 @@ class GitHubService {
         }
         
         guard httpResponse.statusCode == 200 else {
-            print("â HTTP Error: \(httpResponse.statusCode)")
+            print("❌ HTTP Error: \(httpResponse.statusCode)")
             throw GitHubError.httpError(httpResponse.statusCode)
         }
         
-        print("â Issue \(state) successfully")
+        print("✅ Issue \(state) successfully")
     }
 }
 

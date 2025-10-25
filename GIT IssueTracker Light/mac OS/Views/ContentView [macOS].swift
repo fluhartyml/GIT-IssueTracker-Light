@@ -3,7 +3,7 @@
 //  GIT IssueTracker Light
 //
 //  Main interface with navigation stack and browser-style back button
-//  Generated: 2025 OCT 25 1921
+//  Generated: 2025 OCT 25 1610
 //
 
 import SwiftUI
@@ -400,106 +400,18 @@ struct ContentView: View {
     // MARK: - Repository Detail View with Clickable Issue Count
     
     private func repositoryDetailView(repository: Repository) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Repository header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "folder.fill")
-                            .font(.largeTitle)
-                            .foregroundStyle(.blue)
-                        
-                        VStack(alignment: .leading) {
-                            Text(repository.name)
-                                .font(.title)
-                                .bold()
-                            Text(repository.fullName)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    
-                    if let description = repository.description {
-                        Text(description)
-                            .padding(.top, 4)
-                    }
+        RepositoryDetailView(
+            repository: repository,
+            gitHubService: gitHubService,
+            onIssueCreated: {
+                Task {
+                    await fetchData()
                 }
-                .padding()
-                
-                Divider()
-                
-                // Repository stats with CLICKABLE issue count
-                HStack(spacing: 30) {
-                    if let language = repository.language {
-                        VStack {
-                            Text(language)
-                                .font(.title2)
-                                .bold()
-                            Text("Language")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    
-                    VStack {
-                        Text("\(repository.stargazersCount)")
-                            .font(.title2)
-                            .bold()
-                        Text("Stars")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    VStack {
-                        Text("\(repository.forksCount)")
-                            .font(.title2)
-                            .bold()
-                        Text("Forks")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    // CLICKABLE OPEN ISSUES
-                    if let openIssues = repository.openIssuesCount, openIssues > 0 {
-                        Button(action: {
-                            navigateToRepositoryIssues(repository)
-                        }) {
-                            VStack {
-                                Text("\(openIssues)")
-                                    .font(.title2)
-                                    .bold()
-                                    .foregroundStyle(.red)
-                                Text("Open Issues")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .contentShape(Rectangle())
-                    }
-                }
-                .padding()
-                
-                Divider()
-                
-                // Action buttons
-                VStack(spacing: 12) {
-                    Button("Open on GitHub") {
-                        if let url = URL(string: repository.htmlUrl) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    
-                    Button("Copy Clone URL") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(repository.htmlUrl + ".git", forType: .string)
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding()
+            },
+            onNavigateToIssues: {
+                navigateToRepositoryIssues(repository)
             }
-        }
+        )
     }
     
     // MARK: - Placeholder View
@@ -611,6 +523,231 @@ struct ContentView: View {
         }
         
         isLoadingRepos = false
+    }
+}
+
+// MARK: - Repository Detail View
+
+struct RepositoryDetailView: View {
+    let repository: Repository
+    let gitHubService: GitHubService?
+    let onIssueCreated: () -> Void
+    let onNavigateToIssues: () -> Void
+    
+    @State private var showingCreateIssue = false
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Repository header
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .font(.largeTitle)
+                            .foregroundStyle(.blue)
+                        
+                        VStack(alignment: .leading) {
+                            Text(repository.name)
+                                .font(.title)
+                                .bold()
+                            Text(repository.fullName)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    if let description = repository.description {
+                        Text(description)
+                            .padding(.top, 4)
+                    }
+                }
+                .padding()
+                
+                Divider()
+                
+                // Repository stats with CLICKABLE issue count
+                HStack(spacing: 30) {
+                    if let language = repository.language {
+                        VStack {
+                            Text(language)
+                                .font(.title2)
+                                .bold()
+                            Text("Language")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    VStack {
+                        Text("\(repository.stargazersCount)")
+                            .font(.title2)
+                            .bold()
+                        Text("Stars")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    VStack {
+                        Text("\(repository.forksCount)")
+                            .font(.title2)
+                            .bold()
+                        Text("Forks")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    // CLICKABLE OPEN ISSUES
+                    if let openIssues = repository.openIssuesCount, openIssues > 0 {
+                        Button(action: onNavigateToIssues) {
+                            VStack {
+                                Text("\(openIssues)")
+                                    .font(.title2)
+                                    .bold()
+                                    .foregroundStyle(.red)
+                                Text("Open Issues")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                    }
+                }
+                .padding()
+                
+                Divider()
+                
+                // Action buttons
+                VStack(spacing: 12) {
+                    Button("Open on GitHub") {
+                        if let url = URL(string: repository.htmlUrl) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    
+                    Button("Copy Clone URL") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(repository.htmlUrl + ".git", forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button("Create New Issue") {
+                        showingCreateIssue = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding()
+            }
+        }
+        .sheet(isPresented: $showingCreateIssue) {
+            CreateIssueView(
+                repository: repository,
+                gitHubService: gitHubService,
+                onIssueCreated: onIssueCreated
+            )
+        }
+    }
+}
+
+// MARK: - Create Issue View
+
+struct CreateIssueView: View {
+    let repository: Repository
+    let gitHubService: GitHubService?
+    let onIssueCreated: () -> Void
+    
+    @Environment(\.dismiss) var dismiss
+    @State private var issueTitle = ""
+    @State private var issueBody = ""
+    @State private var isCreating = false
+    @State private var errorMessage: String?
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Create New Issue")
+                    .font(.headline)
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+            
+            // Form
+            Form {
+                Section {
+                    HStack {
+                        Text("Repository:")
+                            .foregroundStyle(.secondary)
+                        Text(repository.name)
+                            .bold()
+                    }
+                }
+                
+                Section("Title") {
+                    TextField("Issue title", text: $issueTitle)
+                        .textFieldStyle(.plain)
+                }
+                
+                Section("Description (optional)") {
+                    TextEditor(text: $issueBody)
+                        .frame(minHeight: 150)
+                        .border(Color.gray.opacity(0.3))
+                }
+            }
+            .padding()
+            
+            // Footer buttons
+            HStack {
+                if let error = errorMessage {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                
+                Spacer()
+                
+                Button("Create Issue") {
+                    Task {
+                        await createIssue()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(issueTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCreating)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+        .frame(width: 600, height: 500)
+    }
+    
+    private func createIssue() async {
+        guard let service = gitHubService else { return }
+        guard !issueTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        isCreating = true
+        errorMessage = nil
+        
+        do {
+            try await service.createIssue(
+                in: repository,
+                title: issueTitle,
+                body: issueBody.isEmpty ? nil : issueBody
+            )
+            
+            onIssueCreated()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        
+        isCreating = false
     }
 }
 
