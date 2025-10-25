@@ -3,7 +3,7 @@
 //  GIT IssueTracker Light
 //
 //  Main interface with navigation stack and browser-style back button
-//  Generated: 2025 OCT 25 1640
+//  Generated: 2025 OCT 25 1921
 //
 
 import SwiftUI
@@ -385,18 +385,14 @@ struct ContentView: View {
                         }
                         .buttonStyle(.bordered)
                     }
-                    
-                    Button("View Comments") {
-                        // Comments functionality preserved
-                    }
-                    .buttonStyle(.borderedProminent)
                 }
                 .padding(.horizontal)
                 
                 Divider()
                 
-                // Comments section
+                // Comments section - FIXED: Added .id() to force refresh per issue
                 CommentsView(issue: issue, repository: repository, gitHubService: gitHubService)
+                    .id("\(issue.id)-\(repository.id)") // KEY FIX: Unique identity per issue
             }
         }
     }
@@ -632,9 +628,25 @@ struct CommentsView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Comments (\(comments.count))")
-                .font(.headline)
-                .padding(.horizontal)
+            // UPDATED LABEL: "Comments from GitHub"
+            HStack {
+                Text("Comments from GitHub (\(comments.count))")
+                    .font(.headline)
+                
+                Spacer()
+                
+                // REFRESH BUTTON
+                Button(action: {
+                    Task {
+                        await loadComments()
+                    }
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isLoadingComments)
+            }
+            .padding(.horizontal)
             
             if isLoadingComments {
                 ProgressView()
