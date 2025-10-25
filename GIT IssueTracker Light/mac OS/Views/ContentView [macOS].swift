@@ -128,6 +128,9 @@ struct ContentView: View {
                 selectedIssue = nil
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenSettings"))) { _ in
+            showingSettings = true
+        }
     }
     
     // MARK: - Load Data
@@ -181,9 +184,11 @@ struct RepositoryRow: View {
             }
             
             HStack(spacing: 12) {
-                Label("\(repository.stargazersCount)", systemImage: "star.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if let stars = repository.stargazersCount {
+                    Label("\(stars)", systemImage: "star.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 
                 if let language = repository.language {
                     Text(language)
@@ -269,8 +274,12 @@ struct RepositoryDetailView: View {
                 
                 // Stats
                 HStack(spacing: 24) {
-                    StatView(label: "Stars", value: "\(repository.stargazersCount)", icon: "star.fill")
-                    StatView(label: "Forks", value: "\(repository.forksCount)", icon: "tuningfork")
+                    if let stars = repository.stargazersCount {
+                        StatView(label: "Stars", value: "\(stars)", icon: "star.fill")
+                    }
+                    if let forks = repository.forksCount {
+                        StatView(label: "Forks", value: "\(forks)", icon: "tuningfork")
+                    }
                     if let issues = repository.openIssuesCount {
                         StatView(label: "Open Issues", value: "\(issues)", icon: "exclamationmark.circle")
                     }
@@ -284,8 +293,10 @@ struct RepositoryDetailView: View {
                         Label(language, systemImage: "chevron.left.forwardslash.chevron.right")
                     }
                     
-                    Link(destination: URL(string: repository.htmlUrl)!) {
-                        Label("View on GitHub", systemImage: "link")
+                    if let htmlUrl = repository.htmlUrl, let url = URL(string: htmlUrl) {
+                        Link(destination: url) {
+                            Label("View on GitHub", systemImage: "link")
+                        }
                     }
                 }
                 
@@ -515,4 +526,3 @@ struct CommentView: View {
 #Preview {
     ContentView()
 }
-

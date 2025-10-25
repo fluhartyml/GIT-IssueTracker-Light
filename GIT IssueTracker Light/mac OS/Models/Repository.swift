@@ -10,12 +10,12 @@ import Foundation
 struct Repository: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
-    let fullName: String
+    let fullName: String?
     let description: String?
-    let htmlUrl: String
+    let htmlUrl: String?
     let language: String?
-    let stargazersCount: Int
-    let forksCount: Int
+    let stargazersCount: Int?
+    let forksCount: Int?
     let openIssuesCount: Int?
     
     enum CodingKeys: String, CodingKey {
