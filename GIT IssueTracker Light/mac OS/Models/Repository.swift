@@ -18,6 +18,7 @@ struct Repository: Identifiable, Codable, Hashable {
     let stargazersCount: Int
     let forksCount: Int
     let openIssuesCount: Int?
+    let hasWiki: Bool?
     
     enum CodingKeys: String, CodingKey {
         case id, name, description, language
@@ -26,6 +27,7 @@ struct Repository: Identifiable, Codable, Hashable {
         case stargazersCount = "stargazers_count"
         case forksCount = "forks_count"
         case openIssuesCount = "open_issues_count"
+        case hasWiki = "has_wiki"
     }
 }
 
@@ -40,6 +42,7 @@ extension Repository {
         language: "Swift",
         stargazersCount: 42,
         forksCount: 7,
-        openIssuesCount: 3
+        openIssuesCount: 3,
+        hasWiki: true
     )
 }

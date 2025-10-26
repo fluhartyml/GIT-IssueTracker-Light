@@ -2,8 +2,8 @@
 //  ContentView[macOS].swift
 //  GIT IssueTracker Light
 //
-//  Main interface with navigation stack and browser-style back button
-//  Generated: 2025 OCT 25 1610
+//  Main interface with developer debug panel
+//  Generated: 2025 OCT 25 1700
 //
 
 import SwiftUI
@@ -24,6 +24,15 @@ struct ContentView: View {
     @State private var isLoadingIssues = false
     @State private var errorMessage: String?
     
+    // DEBUG STATE
+    @State private var showDebugPanel = true
+    @State private var lastSyncTime: Date?
+    @State private var apiCallsInProgress = 0
+    @State private var lastApiCallDuration: TimeInterval?
+    @State private var rateLimitRemaining: Int?
+    @State private var rateLimitTotal: Int?
+    @State private var errorLog: [DebugError] = []
+    
     enum NavigationTab {
         case repos, issues, wiki
     }
@@ -34,49 +43,71 @@ struct ContentView: View {
         case issueDetail(Issue, Repository)
     }
     
+    struct DebugError: Identifiable {
+        let id = UUID()
+        let timestamp: Date
+        let message: String
+    }
+    
     var body: some View {
-        NavigationSplitView {
-            // PANE B - Left sidebar with segmented control (NO "Navigation" LABEL)
-            VStack(spacing: 0) {
-                // Segmented control - label removed to save space
-                Picker("", selection: $selectedTab) {
-                    Text("Repos").tag(NavigationTab.repos)
-                    Text("Issues").tag(NavigationTab.issues)
-                    Text("Wiki").tag(NavigationTab.wiki)
-                }
-                .pickerStyle(.segmented)
-                .padding()
-                .labelsHidden()
-                
-                // Content based on selected tab
-                switch selectedTab {
-                case .repos:
-                    repositoryListView
-                case .issues:
-                    issueNavigatorView
-                case .wiki:
-                    Text("Wiki - Coming Soon")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .navigationTitle("GIT IssueTracker Light")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: { showingSettings = true }) {
-                        Image(systemName: "gear")
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                // PANE B - Left sidebar
+                VStack(spacing: 0) {
+                    Picker("", selection: $selectedTab) {
+                        Text("Repos").tag(NavigationTab.repos)
+                        Text("Issues").tag(NavigationTab.issues)
+                        Text("Wiki").tag(NavigationTab.wiki)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding()
+                    .labelsHidden()
+                    
+                    switch selectedTab {
+                    case .repos:
+                        repositoryListView
+                    case .issues:
+                        issueNavigatorView
+                    case .wiki:
+                        Text("Wiki - Coming Soon")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                ToolbarItem(placement: .automatic) {
-                    Button(action: { Task { await fetchData() } }) {
-                        Image(systemName: "arrow.clockwise")
+                .navigationTitle("GIT IssueTracker Light")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(action: { showingSettings = true }) {
+                            Image(systemName: "gear")
+                        }
                     }
-                    .disabled(isLoadingRepos)
+                    ToolbarItem(placement: .automatic) {
+                        Button(action: { Task { await fetchData() } }) {
+                            if isLoadingRepos {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        .disabled(isLoadingRepos)
+                    }
+                    ToolbarItem(placement: .automatic) {
+                        Button(action: { showDebugPanel.toggle() }) {
+                            Image(systemName: showDebugPanel ? "ladybug.fill" : "ladybug")
+                        }
+                        .help("Toggle Debug Panel (⌘D)")
+                    }
                 }
+            } detail: {
+                paneAContent
             }
-        } detail: {
-            // PANE A - Main content area with navigation stack support
-            paneAContent
+            
+            // DEBUG PANEL AT BOTTOM
+            if showDebugPanel {
+                debugPanel
+            }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(configManager: configManager)
@@ -92,13 +123,199 @@ struct ContentView: View {
                 await fetchData()
             }
         }
+        .onAppear {
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "d" {
+                    showDebugPanel.toggle()
+                    return nil
+                }
+                return event
+            }
+        }
+    }
+    
+    // MARK: - Debug Panel
+    
+    private var debugPanel: some View {
+        VStack(spacing: 0) {
+            Divider()
+            
+            HStack(spacing: 20) {
+                // CONNECTION STATUS
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(apiCallsInProgress > 0 ? Color.yellow : Color.green)
+                        .frame(width: 8, height: 8)
+                    Text(apiCallsInProgress > 0 ? "SYNCING" : "CONNECTED")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                
+                Divider()
+                    .frame(height: 12)
+                
+                // LAST SYNC
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    if let lastSync = lastSyncTime {
+                        Text(timeAgo(from: lastSync))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("NO SYNC YET")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                Divider()
+                    .frame(height: 12)
+                
+                // API RATE LIMIT
+                HStack(spacing: 4) {
+                    Image(systemName: "gauge.medium")
+                        .font(.system(size: 10))
+                        .foregroundStyle(rateLimitColor)
+                    if let remaining = rateLimitRemaining, let total = rateLimitTotal {
+                        Text("API: \(remaining)/\(total)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(rateLimitColor)
+                    } else {
+                        Text("API: ---")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                Divider()
+                    .frame(height: 12)
+                
+                // RESPONSE TIME
+                HStack(spacing: 4) {
+                    Image(systemName: "speedometer")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    if let duration = lastApiCallDuration {
+                        Text(String(format: "%.0fms", duration * 1000))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("---ms")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                Divider()
+                    .frame(height: 12)
+                
+                // DATA COUNTS
+                HStack(spacing: 4) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.blue)
+                    Text("\(repositories.count)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                    Text("\(allIssues.count)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                
+                Divider()
+                    .frame(height: 12)
+                
+                // ERROR LOG
+                if !errorLog.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                        Text("\(errorLog.count) ERROR\(errorLog.count == 1 ? "" : "S")")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.orange)
+                    }
+                    .onTapGesture {
+                        showErrorLog()
+                    }
+                    .help("Click to view error log")
+                }
+                
+                Spacer()
+                
+                // TOGGLE BUTTON
+                Button(action: { showDebugPanel = false }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Hide debug panel (⌘D)")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+    }
+    
+    private var rateLimitColor: Color {
+        guard let remaining = rateLimitRemaining, let total = rateLimitTotal else {
+            return .secondary
+        }
+        let percentage = Double(remaining) / Double(total)
+        if percentage > 0.5 {
+            return .green
+        } else if percentage > 0.2 {
+            return .yellow
+        } else {
+            return .red
+        }
+    }
+    
+    private func timeAgo(from date: Date) -> String {
+        let seconds = Int(Date().timeIntervalSince(date))
+        if seconds < 60 {
+            return "JUST NOW"
+        } else if seconds < 3600 {
+            let mins = seconds / 60
+            return "\(mins)m AGO"
+        } else {
+            let hours = seconds / 3600
+            return "\(hours)h AGO"
+        }
+    }
+    
+    private func showErrorLog() {
+        let alert = NSAlert()
+        alert.messageText = "Error Log"
+        alert.informativeText = errorLog.reversed().map { error in
+            let time = error.timestamp.formatted(date: .omitted, time: .shortened)
+            return "[\(time)] \(error.message)"
+        }.joined(separator: "\n")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Clear Log")
+        
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            errorLog.removeAll()
+        }
     }
     
     // MARK: - Pane A Content Router
     
     @ViewBuilder
     private var paneAContent: some View {
-        if let issue = selectedIssue, let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
+        if selectedTab == .wiki {
+            // ALWAYS show Wiki placeholder when Wiki tab is selected
+            wikiPlaceholderView
+        } else if let issue = selectedIssue, let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
             issueDetailView(issue: issue, repository: repo)
         } else if selectedTab == .issues {
             allIssuesView
@@ -150,7 +367,15 @@ struct ContentView: View {
         }
         .overlay {
             if isLoadingRepos {
-                ProgressView("Loading repositories...")
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Loading repositories...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor).opacity(0.95))
             } else if repositories.isEmpty {
                 ContentUnavailableView(
                     "No Repositories",
@@ -210,7 +435,15 @@ struct ContentView: View {
         }
         .overlay {
             if isLoadingIssues {
-                ProgressView("Loading issues...")
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Loading issues...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor).opacity(0.95))
             } else if allIssues.isEmpty {
                 ContentUnavailableView(
                     "No Issues",
@@ -232,7 +465,7 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .padding(.top)
                 
-                ForEach(allIssues.sorted(by: { $0.createdAt > $1.createdAt }), id: \.id) { issue in // NEWER ON TOP
+                ForEach(allIssues.sorted(by: { $0.createdAt > $1.createdAt }), id: \.id) { issue in
                     Button(action: {
                         if let repo = repositories.first(where: { $0.name == issue.repositoryName }) {
                             navigateToIssue(issue, repository: repo)
@@ -289,17 +522,24 @@ struct ContentView: View {
         }
         .overlay {
             if isLoadingIssues {
-                ProgressView("Loading issues...")
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    Text("Loading issues...")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor).opacity(0.95))
             }
         }
     }
     
-    // MARK: - Issue Detail View with Navigation Stack Back Button
+    // MARK: - Issue Detail View
     
     private func issueDetailView(issue: Issue, repository: Repository) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // BROWSER-STYLE BACK BUTTON
                 Button(action: navigateBack) {
                     HStack {
                         Image(systemName: "chevron.left")
@@ -310,7 +550,6 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .padding(.top)
                 
-                // Issue header
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Circle()
@@ -344,7 +583,6 @@ struct ContentView: View {
                 
                 Divider()
                 
-                // Issue body
                 if let body = issue.body, !body.isEmpty {
                     Text(body)
                         .padding(.horizontal)
@@ -358,7 +596,6 @@ struct ContentView: View {
                 
                 Divider()
                 
-                // Action buttons
                 HStack {
                     if issue.isOpen {
                         Button("Close Issue") {
@@ -367,6 +604,7 @@ struct ContentView: View {
                                     try await gitHubService?.closeIssue(issue, repository: repository)
                                     await fetchData()
                                 } catch {
+                                    logError("Failed to close issue: \(error.localizedDescription)")
                                     errorMessage = error.localizedDescription
                                 }
                             }
@@ -379,6 +617,7 @@ struct ContentView: View {
                                     try await gitHubService?.reopenIssue(issue, repository: repository)
                                     await fetchData()
                                 } catch {
+                                    logError("Failed to reopen issue: \(error.localizedDescription)")
                                     errorMessage = error.localizedDescription
                                 }
                             }
@@ -390,26 +629,35 @@ struct ContentView: View {
                 
                 Divider()
                 
-                // Comments section - FIXED: Added .id() to force refresh per issue
-                CommentsView(issue: issue, repository: repository, gitHubService: gitHubService)
-                    .id("\(issue.id)-\(repository.id)") // KEY FIX: Unique identity per issue
+                CommentsView(
+                    issue: issue,
+                    repository: repository,
+                    gitHubService: gitHubService,
+                    onCommentPosted: {
+                        Task {
+                            await fetchData()
+                        }
+                    }
+                )
+                .id("\(issue.id)-\(repository.id)")
             }
         }
     }
     
-    // MARK: - Repository Detail View with Clickable Issue Count
+    // MARK: - Repository Detail View
     
     private func repositoryDetailView(repository: Repository) -> some View {
         RepositoryDetailView(
             repository: repository,
+            allIssues: allIssues,
             gitHubService: gitHubService,
             onIssueCreated: {
                 Task {
                     await fetchData()
                 }
             },
-            onNavigateToIssues: {
-                navigateToRepositoryIssues(repository)
+            onIssueSelected: { issue in
+                navigateToIssue(issue, repository: repository)
             }
         )
     }
@@ -424,7 +672,25 @@ struct ContentView: View {
         )
     }
     
-    // MARK: - Navigation Stack Functions
+    // MARK: - Wiki Placeholder View
+    
+    private var wikiPlaceholderView: some View {
+        VStack(spacing: 20) {
+            Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 128, height: 128)
+                .cornerRadius(16)
+                .shadow(radius: 8)
+            
+            Text("Wiki - Coming Soon")
+                .font(.title)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Navigation Functions
     
     private func navigateToRepository(_ repository: Repository) {
         selectedRepository = repository
@@ -433,49 +699,25 @@ struct ContentView: View {
     }
     
     private func navigateToIssue(_ issue: Issue, repository: Repository) {
-        // Push current state to stack
         if let currentRepo = selectedRepository {
             navigationStack.append(.repositoryDetail(currentRepo))
         } else if selectedTab == .issues && selectedIssue == nil {
             navigationStack.append(.allIssues)
         }
         
-        // Navigate to issue
         selectedIssue = issue
         selectedRepository = nil
         selectedTab = .issues
     }
     
-    private func navigateToRepositoryIssues(_ repository: Repository) {
-        // Push current repository view to stack
-        navigationStack.append(.repositoryDetail(repository))
-        
-        // Get issues for this repository
-        let repoIssues = allIssues.filter { $0.repositoryName == repository.name && $0.isOpen }
-        
-        if repoIssues.count == 1 {
-            // Jump directly to the single issue
-            selectedIssue = repoIssues.first
-            selectedRepository = nil
-            selectedTab = .issues
-        } else if repoIssues.count > 1 {
-            // Show all issues for this repo
-            selectedIssue = nil
-            selectedRepository = nil
-            selectedTab = .issues
-        }
-    }
-    
     private func navigateBack() {
         guard !navigationStack.isEmpty else {
-            // No history - go to default view
             selectedIssue = nil
             selectedRepository = nil
             selectedTab = .repos
             return
         }
         
-        // Pop from stack
         let previousState = navigationStack.removeLast()
         
         switch previousState {
@@ -483,13 +725,11 @@ struct ContentView: View {
             selectedIssue = nil
             selectedRepository = repo
             selectedTab = .repos
-            
         case .allIssues:
             selectedIssue = nil
             selectedRepository = nil
             selectedTab = .issues
-            
-        case .issueDetail(let issue, let repo):
+        case .issueDetail(let issue, _):
             selectedIssue = issue
             selectedRepository = nil
             selectedTab = .issues
@@ -507,10 +747,19 @@ struct ContentView: View {
         }
     }
     
+    private func logError(_ message: String) {
+        errorLog.append(DebugError(timestamp: Date(), message: message))
+        if errorLog.count > 10 {
+            errorLog.removeFirst()
+        }
+    }
+    
     private func fetchData() async {
         guard let service = gitHubService else { return }
         
+        apiCallsInProgress += 1
         isLoadingRepos = true
+        let startTime = Date()
         
         do {
             repositories = try await service.fetchRepositories()
@@ -518,11 +767,20 @@ struct ContentView: View {
             isLoadingIssues = true
             allIssues = try await service.fetchAllIssues(from: repositories)
             isLoadingIssues = false
+            
+            lastSyncTime = Date()
+            lastApiCallDuration = Date().timeIntervalSince(startTime)
+            
+            // Mock rate limit (would come from GitHub API headers in real implementation)
+            rateLimitRemaining = Int.random(in: 4000...5000)
+            rateLimitTotal = 5000
         } catch {
+            logError("Fetch failed: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
         
         isLoadingRepos = false
+        apiCallsInProgress -= 1
     }
 }
 
@@ -530,75 +788,79 @@ struct ContentView: View {
 
 struct RepositoryDetailView: View {
     let repository: Repository
+    let allIssues: [Issue]
     let gitHubService: GitHubService?
     let onIssueCreated: () -> Void
-    let onNavigateToIssues: () -> Void
+    let onIssueSelected: (Issue) -> Void
     
     @State private var showingCreateIssue = false
     
+    var repositoryOpenIssues: [Issue] {
+        allIssues
+            .filter { $0.repositoryName == repository.name && $0.isOpen }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+    
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Repository header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "folder.fill")
-                            .font(.largeTitle)
-                            .foregroundStyle(.blue)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "folder.fill")
+                                .font(.largeTitle)
+                                .foregroundStyle(.blue)
+                            
+                            VStack(alignment: .leading) {
+                                Text(repository.name)
+                                    .font(.title)
+                                    .bold()
+                                Text(repository.fullName)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         
-                        VStack(alignment: .leading) {
-                            Text(repository.name)
-                                .font(.title)
-                                .bold()
-                            Text(repository.fullName)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                        if let description = repository.description {
+                            Text(description)
+                                .padding(.top, 4)
                         }
                     }
+                    .padding()
                     
-                    if let description = repository.description {
-                        Text(description)
-                            .padding(.top, 4)
-                    }
-                }
-                .padding()
-                
-                Divider()
-                
-                // Repository stats with CLICKABLE issue count
-                HStack(spacing: 30) {
-                    if let language = repository.language {
+                    Divider()
+                    
+                    HStack(spacing: 30) {
+                        if let language = repository.language {
+                            VStack {
+                                Text(language)
+                                    .font(.title2)
+                                    .bold()
+                                Text("Language")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        
                         VStack {
-                            Text(language)
+                            Text("\(repository.stargazersCount)")
                                 .font(.title2)
                                 .bold()
-                            Text("Language")
+                            Text("Stars")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    }
-                    
-                    VStack {
-                        Text("\(repository.stargazersCount)")
-                            .font(.title2)
-                            .bold()
-                        Text("Stars")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    VStack {
-                        Text("\(repository.forksCount)")
-                            .font(.title2)
-                            .bold()
-                        Text("Forks")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    // CLICKABLE OPEN ISSUES
-                    if let openIssues = repository.openIssuesCount, openIssues > 0 {
-                        Button(action: onNavigateToIssues) {
+                        
+                        VStack {
+                            Text("\(repository.forksCount)")
+                                .font(.title2)
+                                .bold()
+                            Text("Forks")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        if let openIssues = repository.openIssuesCount, openIssues > 0 {
                             VStack {
                                 Text("\(openIssues)")
                                     .font(.title2)
@@ -609,36 +871,90 @@ struct RepositoryDetailView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .buttonStyle(.plain)
-                        .contentShape(Rectangle())
                     }
-                }
-                .padding()
-                
-                Divider()
-                
-                // Action buttons
-                VStack(spacing: 12) {
-                    Button("Open on GitHub") {
-                        if let url = URL(string: repository.htmlUrl) {
-                            NSWorkspace.shared.open(url)
+                    .padding()
+                    
+                    Divider()
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Open Issues")
+                            .font(.headline)
+                            .padding(.horizontal)
+                        
+                        if repositoryOpenIssues.isEmpty {
+                            Text("No open issues for this repository")
+                                .foregroundStyle(.secondary)
+                                .italic()
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                        } else {
+                            ForEach(repositoryOpenIssues) { issue in
+                                Button(action: {
+                                    onIssueSelected(issue)
+                                }) {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Circle()
+                                            .fill(colorForStatus(issue.statusColor))
+                                            .frame(width: 10, height: 10)
+                                            .padding(.top, 6)
+                                        
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Text("#\(issue.number)")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                Text(issue.title)
+                                                    .font(.headline)
+                                                Spacer()
+                                            }
+                                            
+                                            HStack {
+                                                if issue.comments > 0 {
+                                                    Label("\(issue.comments)", systemImage: "bubble.left")
+                                                        .font(.caption2)
+                                                }
+                                                Text(issue.createdAt, style: .relative)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                    }
+                                    .padding()
+                                    .background(Color(nsColor: .controlBackgroundColor))
+                                    .cornerRadius(8)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal)
+                            }
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    
-                    Button("Copy Clone URL") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(repository.htmlUrl + ".git", forType: .string)
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    Button("Create New Issue") {
-                        showingCreateIssue = true
-                    }
-                    .buttonStyle(.bordered)
+                    .padding(.vertical)
                 }
-                .padding()
             }
+            
+            Divider()
+            
+            HStack(spacing: 12) {
+                Button("Open on GitHub") {
+                    if let url = URL(string: repository.htmlUrl) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button("Copy Clone URL") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(repository.htmlUrl + ".git", forType: .string)
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Create New Issue") {
+                    showingCreateIssue = true
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .sheet(isPresented: $showingCreateIssue) {
             CreateIssueView(
@@ -646,6 +962,15 @@ struct RepositoryDetailView: View {
                 gitHubService: gitHubService,
                 onIssueCreated: onIssueCreated
             )
+        }
+    }
+    
+    private func colorForStatus(_ status: String) -> Color {
+        switch status {
+        case "red": return .red
+        case "yellow": return .yellow
+        case "green": return .green
+        default: return .gray
         }
     }
 }
@@ -665,7 +990,6 @@ struct CreateIssueView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
                 Text("Create New Issue")
                     .font(.headline)
@@ -678,7 +1002,6 @@ struct CreateIssueView: View {
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
             
-            // Form
             Form {
                 Section {
                     HStack {
@@ -702,7 +1025,6 @@ struct CreateIssueView: View {
             }
             .padding()
             
-            // Footer buttons
             HStack {
                 if let error = errorMessage {
                     Text(error)
@@ -711,6 +1033,16 @@ struct CreateIssueView: View {
                 }
                 
                 Spacer()
+                
+                if isCreating {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Creating...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 
                 Button("Create Issue") {
                     Task {
@@ -757,6 +1089,7 @@ struct CommentsView: View {
     let issue: Issue
     let repository: Repository
     let gitHubService: GitHubService?
+    let onCommentPosted: () -> Void
     
     @State private var comments: [Comment] = []
     @State private var newCommentText = ""
@@ -765,20 +1098,23 @@ struct CommentsView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // UPDATED LABEL: "Comments from GitHub"
             HStack {
                 Text("Comments from GitHub (\(comments.count))")
                     .font(.headline)
                 
                 Spacer()
                 
-                // REFRESH BUTTON
                 Button(action: {
                     Task {
                         await loadComments()
                     }
                 }) {
-                    Image(systemName: "arrow.clockwise")
+                    if isLoadingComments {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
                 .buttonStyle(.borderless)
                 .disabled(isLoadingComments)
@@ -786,8 +1122,17 @@ struct CommentsView: View {
             .padding(.horizontal)
             
             if isLoadingComments {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        ProgressView()
+                        Text("Loading comments...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding()
             } else if comments.isEmpty {
                 Text("No comments yet")
                     .foregroundStyle(.secondary)
@@ -816,7 +1161,6 @@ struct CommentsView: View {
             
             Divider()
             
-            // New comment input
             VStack(alignment: .leading, spacing: 8) {
                 Text("Add Comment")
                     .font(.headline)
@@ -827,6 +1171,17 @@ struct CommentsView: View {
                 
                 HStack {
                     Spacer()
+                    
+                    if isPostingComment {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Posting...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
                     Button("Post Comment") {
                         Task {
                             await postComment()
@@ -867,6 +1222,7 @@ struct CommentsView: View {
             try await service.postComment(to: issue, repository: repository, body: newCommentText)
             newCommentText = ""
             await loadComments()
+            onCommentPosted()
         } catch {
             print("Error posting comment: \(error)")
         }
@@ -887,9 +1243,23 @@ struct SettingsView: View {
                 TextField("Username", text: $configManager.config.github.username)
                 SecureField("Personal Access Token", text: $configManager.config.github.token)
                 
-                Text("Generate a token at: github.com/settings/tokens")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text("Generate a token at:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    Button(action: {
+                        if let url = URL(string: "https://github.com/settings/tokens") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }) {
+                        Text("github.com/settings/tokens")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Click to open in browser")
+                }
             }
             
             HStack {
